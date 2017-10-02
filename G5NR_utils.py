@@ -8,7 +8,7 @@ def genlon_bins(nlon):
     stop=180.0
     dy=(stop-start)/float(nlon)
     ra=itertools.count(start-dy/2,dy)
-    return [ra.next() for i in xrange(nlon+1)]
+    return [ra.next() for i in range(nlon+1)]
 def genlon_bins2(nlon):
     """mainly to match cdo calculations"""
     """watch out when close to 180"""
@@ -27,7 +27,7 @@ def genlat_bins(nlat):
     stop=90.0
     dy=(stop-start)/float(nlat-1)
     ra=itertools.count(start-dy/2,dy)
-    return [ra.next() for i in xrange(nlat+1)]
+    return [ra.next() for i in range(nlat+1)]
 def subgrid(variable,nlon=None,nlat=None,res=None):
     #assert isinstance(variable,xr.DataArray),"please pass a xarray DataArray not whole dataset"
     if nlon and nlat:
