@@ -117,17 +117,28 @@ def SKEDot(rho,u,v,w,nlon,nlat):
     v_regrid=regrid(v,nlon,nlat)
     w_regrid=regrid(w,nlon,nlat) 
     rho_regrid=regrid(rho,nlon,nlat) 
-
     up=subgrid(u,nlon,nlat)
+    vp=subgrid(v,nlon,nlat)
     wp=subgrid(w,nlon,nlat)
-    vp=subgrid(u,nlon,nlat)
-   
+
+    upwp=regrid(up*wp,nlon,nlat)
+    upwp.name='upwp'
+
+    vpwp=regrid(vp*wp,nlon,nlat)
+    vpwp.name='vpwp'
+
+    uw=regrid(u*w,nlon,nlat)
+    uw.name='uw'
+    vw=regrid(v*w,nlon,nlat)
+    vw.name='vw'
+
+        
     rhoupwp=rho*up*wp
-    rhovpwp=rho*up*wp
+    rhovpwp=rho*vp*wp
     
            
     Eddy_Flux_Zon=regrid(rhoupwp,nlon,nlat)
-    Eddy_Flux_Mer=regrid(rhoupwp,nlon,nlat)
+    Eddy_Flux_Mer=regrid(rhovpwp,nlon,nlat)
     Eddy_Flux_Zon.name='Eddy_Flux_Zon'
     Eddy_Flux_Mer.name='Eddy_Flux_Mer'
 #make it a dataset for easy function application on all variables 
@@ -141,13 +152,18 @@ def SKEDot(rho,u,v,w,nlon,nlat):
     axisint=1 if len(np.shape(Eddy_Flux_Zon))>3 else 0
     Eddy_Flux_Tend=Eddy_Flux.apply(np.gradient,axis=axisint)
     Eddy_Flux_Tend=Eddy_Flux_Tend/dPbyg
+   
+    Eddy_Tend_Zon=Eddy_Flux_Tend['Eddy_Flux_Zon']
+    Eddy_Tend_Zon.name='Eddy_Tend_Zon'
 
+    Eddy_Tend_Mer=Eddy_Flux_Tend['Eddy_Flux_Mer']
+    Eddy_Tend_Mer.name='Eddy_Tend_Mer'
 
 
     u_baro=(rho_regrid*u_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
-    u_baro.name='vbaro'
+    u_baro.name='ubaro'
     v_baro=(rho_regrid*v_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
-    v_baro.name='ubaro'
+    v_baro.name='vbaro'
     
 
     ushear=u_regrid-u_baro
@@ -164,7 +180,7 @@ def SKEDot(rho,u,v,w,nlon,nlat):
     SKEDOT.name='SKEDOT'
     SKEDOT.attrs={'long_name':'dp/g Integral(-d/dp([uw]-[u][w])*u_shear - d/dp([vw]-[v][w])*v_shear)','units':'W m-2'}
     
-    skedot_dataset=xr.merge([SKE,SKEDOT,u_baro,v_baro,Eddy_Flux_Zon,Eddy_Flux_Mer,ushear,vshear])
+    skedot_dataset=xr.merge([SKE,SKEDOT,upwp,vpwp,uw,vw,u_baro,v_baro,Eddy_Flux_Zon,Eddy_Flux_Mer,ushear,Eddy_Tend_Zon,Eddy_Tend_Mer,vshear])
 
     #return SKEDOT
     return skedot_dataset
