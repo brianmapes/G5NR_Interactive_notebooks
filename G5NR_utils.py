@@ -1,5 +1,9 @@
 import xarray as xr
 import numpy as np
+from io import BytesIO
+from zipfile import ZipFile
+from urllib import request
+
 def genlon_bins(nlon):
     """mainly to match cdo calculations"""
     """watch out when close to 180"""
@@ -8,7 +12,7 @@ def genlon_bins(nlon):
     stop=180.0
     dy=(stop-start)/float(nlon)
     ra=itertools.count(start-dy/2,dy)
-    return [ra.next() for i in range(nlon+1)]
+    return [next(ra) for i in range(nlon+1)]
 def genlon_bins2(nlon):
     """mainly to match cdo calculations"""
     """watch out when close to 180"""
@@ -27,7 +31,7 @@ def genlat_bins(nlat):
     stop=90.0
     dy=(stop-start)/float(nlat-1)
     ra=itertools.count(start-dy/2,dy)
-    return [ra.next() for i in range(nlat+1)]
+    return [next(ra) for i in range(nlat+1)]
 def subgrid(variable,nlon=None,nlat=None,res=None):
     #assert isinstance(variable,xr.DataArray),"please pass a xarray DataArray not whole dataset"
     if nlon and nlat:
@@ -89,29 +93,24 @@ def regrid(variable,nlon,nlat,weights=None):
 
     return regrided.sel(lat=slice(variable.lat.min(),variable.lat.max()),lon=slice(variable.lon.min(),variable.lon.max()))
  
-def upwp_u_w_uw(u,w,uw,nlat,nlon):
-    u_reg=regrid(u,nlat,nlon)
-    w_reg=regrid(w,nlat,nlon)
-    uw_reg=regrid(uw,nlat,nlon)
+def load_from_zidv(url=None,outdir=None):
+    assert url.startswith('http:'),'only urls supported at this time'
+    remote_file=request.urlopen(url)
+    with ZipFile(BytesIO(remote_file.read())) as zip_file:
+       for contained_file in zip_file.namelist():
+           if str(contained_file)=='data_0_3D7km30minuteInst':
+                da_3d=xr.open_dataset(zip_file.extract(contained_file,outdir))
+           if str(contained_file)=='data_1_inst30mn_2d_met1_Nx':
+                da_2d=xr.open_dataset(zip_file.extract(contained_file,outdir))
+    return xr.merge([da_3d,da_2d])
 
-    upwp_reg=uw_reg-(u_reg*w_reg)
-    #upwp_reg=upwp_reg.rename({'U':'UpWp'})
-    upwp_reg.name='UpWp'
-    
-    return xr.merge([u_reg,w_reg,uw_reg,upwp_reg])
-  
-def upwp_u_w(u,w,nlat,nlon):
-    up=subgrid(u,nlat,nlon)
-    wp=subgrid(w,nlat,nlon)
-    upwp=up*wp
-    upwp.name='UpWp'
-    upwp_reg=regrid(upwp,nlat,nlon)
+def load_05deg_dataset():
+    url='http://weather.rsmas.miami.edu/repository/opendap/synth:1142722f-a386-4c17-a4f6-0f685cd19ae3:L0c1TlIvRzVOUi1BdmcxaC0wLjVkZWctVVZXX1VXX1ZXLm5jbWw=/entry.das'
+    return xr.open_dataset(url)
 
-    u_reg=regrid(u,nlat,nlon)
-    w_reg=regrid(w,nlat,nlon)
-    uw_reg=regrid(u*w,nlat,nlon)
-    uw_reg.name='wu'
-    return xr.merge([u_reg,w_reg,uw_reg,upwp_reg]) 
+def load_4deg_dataset():
+    url='http://weather.rsmas.miami.edu/repository/opendap/synth:1142722f-a386-4c17-a4f6-0f685cd19ae3:L0c1TlIvRzVOUi1BdmcxaC00ZGVnLVVWV19VV19WVy5uY21s/entry.das'
+    return xr.open_dataset(url)
 
 def SKEDot(rho,u,v,w,nlon,nlat):
     u_regrid=regrid(u,nlon,nlat)
@@ -143,14 +142,18 @@ def SKEDot(rho,u,v,w,nlon,nlat):
     Eddy_Flux_Tend=Eddy_Flux.apply(np.gradient,axis=axisint)
     Eddy_Flux_Tend=Eddy_Flux_Tend/dPbyg
 
-    u_baro=(rho_regrid*u_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
-    v_baro=(rho_regrid*v_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
+
 
     u_baro=(rho_regrid*u_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
+    u_baro.name='vbaro'
     v_baro=(rho_regrid*v_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
+    v_baro.name='ubaro'
+    
 
     ushear=u_regrid-u_baro
+    ushear.name='ushear'
     vshear=v_regrid-v_baro
+    vshear.name='vshear'
 
     SKE=ushear*ushear+vshear*vshear
     SKE=(rho_regrid*SKE).sum(dim='lev')/rho_regrid.sum(dim='lev')
@@ -160,5 +163,8 @@ def SKEDot(rho,u,v,w,nlon,nlat):
     SKEDOT=(Eddy_Flux['Eddy_Flux_Zon']*ushear/dPbyg + Eddy_Flux['Eddy_Flux_Mer']*vshear/dPbyg).sum(dim='lev')
     SKEDOT.name='SKEDOT'
     SKEDOT.attrs={'long_name':'dp/g Integral(-d/dp([uw]-[u][w])*u_shear - d/dp([vw]-[v][w])*v_shear)','units':'W m-2'}
-    return SKEDOT
+    
+    skedot_dataset=xr.merge([SKE,SKEDOT,u_baro,v_baro,Eddy_Flux_Zon,Eddy_Flux_Mer,ushear,vshear])
 
+    #return SKEDOT
+    return skedot_dataset
