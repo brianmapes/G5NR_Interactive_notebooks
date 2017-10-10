@@ -76,9 +76,6 @@ def regrid(variable,nlon,nlat,weights=None):
 
     regrided=regrided.rename({'lat_bins':'lat'})
     regrided=regrided.rename({'lon_bins':'lon'})
-    #print("#############")
-    #print(regrided)
-    #regrided=regrided.rename({'lat_bins':'lat','lon_bins':'lon'})
     lats=[]
     for latbin in regrided.lat.values:
         latbounds=[float(lat) for lat in str(latbin).strip(r'(])').split(',')]
@@ -111,6 +108,14 @@ def load_05deg_dataset():
 def load_4deg_dataset():
     url='http://weather.rsmas.miami.edu/repository/opendap/synth:1142722f-a386-4c17-a4f6-0f685cd19ae3:L0c1TlIvRzVOUi1BdmcxaC00ZGVnLVVWV19VV19WVy5uY21s/entry.das'
     return xr.open_dataset(url)
+
+def load_4deg_skedot_dataset(lonflip=True):
+    url='http://weather.rsmas.miami.edu/repository/opendap/synth:1142722f-a386-4c17-a4f6-0f685cd19ae3:L0c1TlIvU0tFZG90X21lcmdlZF85MHg0NS5uYw==/entry.das'
+    url_lonflip='http://weather.rsmas.miami.edu/repository/opendap/synth:1142722f-a386-4c17-a4f6-0f685cd19ae3:L0c1TlIvU0tFZG90X21lcmdlZF85MHg0NV9mbGlwLm5j/entry.das'
+    if lonflip:
+       return xr.open_dataset(url_lonflip)
+    else:
+       return xr.open_dataset(url) 
 
 def SKEDot(rho,u,v,w,nlon,nlat):
     u_regrid=regrid(u,nlon,nlat)
@@ -171,16 +176,102 @@ def SKEDot(rho,u,v,w,nlon,nlat):
     vshear=v_regrid-v_baro
     vshear.name='vshear'
 
-    SKE=ushear*ushear+vshear*vshear
+    SKE=(ushear*ushear+vshear*vshear)*0.5
     SKE=(rho_regrid*SKE).sum(dim='lev')/rho_regrid.sum(dim='lev')
     SKE.name='SKE'
     SKE.attrs={'long_name':'SKE','units':'J Kg^-1'}
 
-    SKEDOT=(Eddy_Flux['Eddy_Flux_Zon']*ushear/dPbyg + Eddy_Flux['Eddy_Flux_Mer']*vshear/dPbyg).sum(dim='lev')
+    SKEDOT=((Eddy_Tend_Zon*ushear + Eddy_Tend_Mer*vshear)*dPbyg).sum(dim='lev')
     SKEDOT.name='SKEDOT'
     SKEDOT.attrs={'long_name':'dp/g Integral(-d/dp([uw]-[u][w])*u_shear - d/dp([vw]-[v][w])*v_shear)','units':'W m-2'}
     
     skedot_dataset=xr.merge([SKE,SKEDOT,upwp,vpwp,uw,vw,u_baro,v_baro,Eddy_Flux_Zon,Eddy_Flux_Mer,ushear,Eddy_Tend_Zon,Eddy_Tend_Mer,vshear])
+
+    #return SKEDOT
+    return skedot_dataset
+
+def SKEDot_from_4deg(time_selection,lon_selection,lat_selection):
+    '''Main difference between this and SKEDot function is this reads 4deg hourly 
+     averaged data from weather.rsmas.so no regridding performed here.'''
+    if lon_selection.start <0:
+       lon_start=360.0+lon_selection.start
+       if lon_selection.stop <0:
+           lon_stop=360.0+lon_selection.stop
+       lon_selection=slice(lon_start,lon_stop)
+       
+    da_4deg=load_4deg_dataset()
+    if isinstance(time_selection,slice):
+        u_regrid=da_4deg.U.sel(time=time_selection).sel(lon=lon_selection,lat=lat_selection)
+        v_regrid=da_4deg.V.sel(time=time_selection).sel(lon=lon_selection,lat=lat_selection)
+        w_regrid=da_4deg.W.sel(time=time_selection).sel(lon=lon_selection,lat=lat_selection)
+    
+        uw_regrid=da_4deg.WU.sel(time=time_selection).sel(lon=lon_selection,lat=lat_selection)
+        vw_regrid=da_4deg.WV.sel(time=time_selection).sel(lon=lon_selection,lat=lat_selection)
+    else:
+        u_regrid=da_4deg.U.sel(time=time_selection,method='nearest').sel(lon=lon_selection,lat=lat_selection)
+        v_regrid=da_4deg.V.sel(time=time_selection,method='nearest').sel(lon=lon_selection,lat=lat_selection)
+        w_regrid=da_4deg.W.sel(time=time_selection,method='nearest').sel(lon=lon_selection,lat=lat_selection)
+    
+        uw_regrid=da_4deg.WU.sel(time=time_selection,method='nearest').sel(lon=lon_selection,lat=lat_selection)
+        vw_regrid=da_4deg.WV.sel(time=time_selection,method='nearest').sel(lon=lon_selection,lat=lat_selection)
+        
+    T_sample=xr.open_dataset('http://weather.rsmas.miami.edu/repository/opendap/synth:1142722f-a386-4c17-a4f6-0f685cd19ae3:L0c1TlIvVF9yOTB4NDVfMXRpbWUubmM0/entry.das')
+    T_sample=T_sample.isel(time=0).sel(lon=lon_selection,lat=lat_selection)['T']
+    T_sample=T_sample.drop('time')
+
+    P=T_sample.lev*100.0
+    rho_regrid=(1/(T_sample*287.06))*P 
+
+    
+    upwp=uw_regrid-u_regrid*w_regrid
+    upwp.name='upwp'
+    vpwp=vw_regrid-v_regrid*w_regrid
+    vpwp.name='vpwp'
+    
+    Eddy_Flux_Zon=upwp*rho_regrid
+    Eddy_Flux_Mer=vpwp*rho_regrid
+    Eddy_Flux_Zon.name='Eddy_Flux_Zon'
+    Eddy_Flux_Mer.name='Eddy_Flux_Mer'
+#make it a dataset for easy function application on all variables 
+    Eddy_Flux=xr.merge([Eddy_Flux_Zon,Eddy_Flux_Mer])
+   
+    dp=u_regrid.lev
+    dp=dp*100.0
+    dp=np.gradient(dp)
+    dPbyg=dp/9.8
+    dPbyg=xr.DataArray(dPbyg,coords={'lev':u_regrid.lev},dims='lev')
+    axisint=1 if len(np.shape(Eddy_Flux_Zon))>3 else 0
+    Eddy_Flux_Tend=Eddy_Flux.apply(np.gradient,axis=axisint)
+    Eddy_Flux_Tend=Eddy_Flux_Tend/dPbyg
+   
+    Eddy_Tend_Zon=Eddy_Flux_Tend['Eddy_Flux_Zon']
+    Eddy_Tend_Zon.name='Eddy_Tend_Zon'
+
+    Eddy_Tend_Mer=Eddy_Flux_Tend['Eddy_Flux_Mer']
+    Eddy_Tend_Mer.name='Eddy_Tend_Mer'
+ 
+     
+    u_baro=(rho_regrid*u_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
+    u_baro.name='ubaro'
+    v_baro=(rho_regrid*v_regrid).sum(dim='lev')/rho_regrid.sum(dim='lev')
+    v_baro.name='vbaro'
+    
+
+    ushear=u_regrid-u_baro
+    ushear.name='ushear'
+    vshear=v_regrid-v_baro
+    vshear.name='vshear'
+
+    SKE=0.5*(ushear*ushear+vshear*vshear)
+    SKE=(rho_regrid*SKE).sum(dim='lev')/rho_regrid.sum(dim='lev')
+    SKE.name='SKE'
+    SKE.attrs={'long_name':'SKE','units':'J Kg^-1'}
+
+    SKEDOT=((Eddy_Tend_Zon*ushear + Eddy_Tend_Mer*vshear)*dPbyg).sum(dim='lev')
+    SKEDOT.name='SKEDOT'
+    SKEDOT.attrs={'long_name':'dp/g Integral(-d/dp([uw]-[u][w])*u_shear - d/dp([vw]-[v][w])*v_shear)','units':'W m-2'}
+    
+    skedot_dataset=xr.merge([SKEDOT,SKE,u_baro,v_baro,Eddy_Flux_Zon,Eddy_Flux_Mer,ushear,Eddy_Tend_Zon,Eddy_Tend_Mer,vshear])
 
     #return SKEDOT
     return skedot_dataset
