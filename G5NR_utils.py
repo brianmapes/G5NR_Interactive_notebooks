@@ -4,6 +4,27 @@ from io import BytesIO
 from zipfile import ZipFile
 from urllib import request
 
+try:
+   import holoviews as hv
+   import geoviews as gv
+   def to_holoimage(data,dynamic=True,style_opts={'cmap':'RdBu_r'},plot_opts={'width':600,'toolbar':'above','colorbar':True}):
+       hvd=hv.Dataset(data)
+       if len(hvd.dimensions())<4:
+          return hvd.to(hv.Image,kdims=['lon','lat'])(plot=plot_opts)(style=style_opts)
+       return hvd.to(hv.Image,kdims=['lon','lat'],dynamic=dynamic)(plot=plot_opts)(style=style_opts)
+   def to_geoimage(data,dynamic=True,style_opts={'cmap':'RdBu_r'},plot_opts={'width':600,'xaxis':None,'yaxis':None,'toolbar':'above','colorbar':True},hover=False):
+       gvd=gv.Dataset(data)
+       if len(gvd.dimensions())<4:
+          gvimg=gvd.to(gv.Image,kdims=['lon','lat'])(plot=plot_opts)(style=style_opts)*gv.feature.coastline
+       else:
+          gvimg=gvd.to(gv.Image,kdims=['lon','lat'],dynamic=dynamic)(plot=plot_opts)(style=style_opts)*gv.feature.coastline
+       if hover:
+          gvimg*=gvd.to(gv.Points,kdims=['lon','lat'])(style={'alpha':0,'marker':'square','size':6})(plot={'tools':['hover']})
+       return gvimg
+   xr.DataArray.to_holoimage=to_holoimage
+   xr.DataArray.to_geoimage=to_geoimage
+except Exception as err:
+   print('Functionality related to holoviews cannot be setup because:  {0}'.format(err))
 def genlon_bins(nlon):
     """mainly to match cdo calculations"""
     """watch out when close to 180"""
