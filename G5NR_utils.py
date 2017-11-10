@@ -12,19 +12,33 @@ try:
        if len(hvd.dimensions())<4:
           return hvd.to(hv.Image,kdims=['lon','lat'])(plot=plot_opts)(style=style_opts)
        return hvd.to(hv.Image,kdims=['lon','lat'],dynamic=dynamic)(plot=plot_opts)(style=style_opts)
-   def to_geoimage(data,dynamic=True,style_opts={'cmap':'RdBu_r'},plot_opts={'width':600,'xaxis':None,'yaxis':None,'toolbar':'above','colorbar':True},hover=False):
+   def to_geoimage(data,dynamic=True,style_opts={'cmap':'RdBu_r'},plot_opts={'width':600,'toolbar':'above','colorbar':True},hover=False):
        gvd=gv.Dataset(data)
        if len(gvd.dimensions())<4:
-          gvimg=gvd.to(gv.Image,kdims=['lon','lat'])(plot=plot_opts)(style=style_opts)*gv.feature.coastline
+          gvimg=gvd.to(gv.Image,kdims=['lon','lat'])(plot=plot_opts)(style=style_opts)
        else:
-          gvimg=gvd.to(gv.Image,kdims=['lon','lat'],dynamic=dynamic)(plot=plot_opts)(style=style_opts)*gv.feature.coastline
+          gvimg=gvd.to(gv.Image,kdims=['lon','lat'],dynamic=dynamic)(plot=plot_opts)(style=style_opts)
        if hover:
-          gvimg*=gvd.to(gv.Points,kdims=['lon','lat'])(style={'alpha':0,'marker':'square','size':6})(plot={'tools':['hover']})
-       return gvimg
+          projected = gv.operation.project_image(gvimg)
+          gvimg=hv.QuadMesh(projected,kdims=gvimg.kdims,vdims=gvimg.vdims)(plot=plot_opts)(style=style_opts)
+          gvimg=gvimg(plot={'tools':['hover']})
+          #gvimg*=gvd.to(gv.Points,kdims=['lon','lat'])(style={'alpha':0,'marker':'square','size':6})(plot={'tools':['hover']})
+       return gvimg #*gv.feature.coastline
    xr.DataArray.to_holoimage=to_holoimage
    xr.DataArray.to_geoimage=to_geoimage
 except Exception as err:
    print('Functionality related to holoviews cannot be setup because:  {0}'.format(err))
+
+try:
+   from pyproj import Proj, transform
+   inProj = Proj(init='epsg:3857')
+   outProj = Proj(init='epsg:4326')
+   def merc_dist2lonlat(xdist,ydist):
+      return transform(inProj,outProj,xdist,ydist)
+   def merc_lonlat2dist(lon,lat):
+      return transform(outProj,inProj,lon,lat)
+except Exception as err:
+   print('Projection transformation related function will be missing because: {0}'.format(err))
 def genlon_bins(nlon):
     """mainly to match cdo calculations"""
     """watch out when close to 180"""
@@ -296,3 +310,130 @@ def SKEDot_from_4deg(time_selection,lon_selection,lat_selection):
 
     #return SKEDOT
     return skedot_dataset
+import requests
+from PIL import Image,ImageDraw
+import itertools
+from bisect import bisect_left
+import io
+requests.urllib3.disable_warnings()
+def G5NR_image(variable,yyyymmddhhmm,lon=0,lat=0,dlon=180,dlat=90,save_global=False,scale_image=1.0,geoviews=False):
+    def frange(start, end, num_of_elements):
+        delta=float(end-start)/(num_of_elements-1)
+        newend=end+delta
+        retl=start
+        while retl < newend :
+            yield retl
+            retl += delta
+    def getUrl(yyyymmddhhmm,variable):    
+        baseurl="https://g5nr.nccs.nasa.gov/static/naturerun/fimages"
+        d="/"
+
+        stringList=[baseurl,variable.upper(),"Y"+yyyymmddhhmm[0:4],"M"+yyyymmddhhmm[4:6],"D"+yyyymmddhhmm[6:8]]
+        stringList+=[variable.lower()+"_globe_c1440_NR_BETA9-SNAP_"+yyyymmddhhmm[0:8]+"_"+yyyymmddhhmm[8:]+"z.png"]
+        url=d.join(stringList)
+        return url
+        
+    def download_file(url):
+        local_filename = url.split('/')[-1]
+
+        r = requests.get(url, stream=True,verify=False)
+        with open(local_filename, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=1024): 
+                if chunk:
+                    f.write(chunk)
+        return local_filename
+    
+    def download_bytes(url):
+        local_filename = url.split('/')[-1]
+
+        r = requests.get(url, stream=True,verify=False)
+        byt = io.BytesIO()
+        for chunk in r.iter_content(chunk_size=512): 
+            if chunk: # filter out keep-alive new chunks
+                 byt.write(chunk)
+        return byt
+
+    url=getUrl(yyyymmddhhmm,variable)
+
+
+    try:
+        if save_global:
+            f=download_file(url) #saves and returns filename
+        else:
+            f = download_bytes(url) #on the fly bytes
+        oimg = Image.open(f)
+        size = oimg.size
+    except IOError:
+        return url+' Not available '
+    dlon=min(dlon,180.0)
+    dlat=min(dlat,90.0)
+    
+    if scale_image<1.0:
+        latbylon=size[1]/size[0]
+        nlon=int(size[0]*scale_image)
+        oimg=oimg.resize((nlon,int(nlon*latbylon)))
+        size = oimg.size
+    
+    if dlon==180.0 and dlat==90.0:
+        latbylon=size[1]/size[0]
+        nlon=int(size[0]*scale_image)
+        return oimg.resize((nlon,int(nlon*latbylon)))
+    lats=list(frange(-90,90,size[1]))
+    lons=list(frange(-17.5,342.5,size[0]))
+    
+    new_im = Image.new('RGB', (size[0],size[1]))
+    x_offset = 0
+    xind=bisect_left(lons,180)
+    
+    images=[oimg.crop((xind,0,size[0],size[1])),oimg.crop((0,0,xind-1,size[1]))]
+    for im in images:
+        new_im.paste(im, (x_offset,0))
+        x_offset += im.size[0]
+    oimg.close()
+    oimg=new_im
+        
+    lons=list(frange(-180.0,180.0,size[0]))
+        
+    if lon>180.0: 
+        lon=lon-360.0
+
+    lon_st=bisect_left(lons,max(lon-dlon,-180.0)) 
+    lon_ct=bisect_left(lons,min(max(lon,-180.0),180.0))
+    lon_en=bisect_left(lons,min(lon+dlon,180.0))
+    
+    lat_en=size[1]-(bisect_left(lats,max(lat-dlat,-90.0))+1)
+    lat_ct=size[1]-(bisect_left(lats,lat)+1)
+    lat_st=size[1]-(bisect_left(lats,min(lat+dlat,90.0))+1)
+
+    
+    lonrange=(lons[lon_st],lons[lon_en])
+    latrange=(lats[bisect_left(lats,max(lat-dlat,-90.0))],lats[bisect_left(lats,min(lat+dlat,90.0))])
+
+    lonboxst=bisect_left(lons,min(max(lon-2,-180.0),180.0))
+    lonboxen=bisect_left(lons,min(max(lon+2,-180.0),180.0))
+    latboxen=size[1]-(bisect_left(lats,max(min(90,lat+2),-90)+1))
+    latboxst=size[1]-(bisect_left(lats,max(min(90,lat-2),-90)+1))
+  
+    draw = ImageDraw.Draw(oimg)
+    box=(lonboxst, latboxen, lonboxen, latboxst)
+    width=int(4*scale_image)
+    for _ in range(width):
+        draw.rectangle(box,outline='Red')
+        box=(box[0]+1,box[1]+1,box[2]+1,box[3]+1)
+        
+    cpd_img=oimg.crop((lon_st,lat_st,lon_en,lat_en))
+    oimg.close()
+    size=cpd_img.size
+    #if scale_image<1.0:
+    #    latbylon=size[1]/size[0]
+    #    nlon=int(size[0]*scale_image)
+    #    cpd_img=cpd_img.resize((nlon,int(nlon*latbylon)))
+    
+    if geoviews:
+        #in future use geoviews.RGB, right now buggy so hv.RGB
+        label=variable.upper()
+        group='Lon: '+format(lon,"0.1f")+' Lat: '+format(lat,"0.1f")+' Time: '+str(yyyymmddhhmm)
+        img=hv.RGB(np.array(cpd_img),label=label,group=group)#.redim.range(Longitude=lonrange,Latitude=latrange)
+        return img(plot={'xaxis':None,'yaxis':None,'width':600})
+    else:
+        return cpd_img  
