@@ -437,3 +437,45 @@ def G5NR_image(variable,yyyymmddhhmm,lon=0,lat=0,dlon=180,dlat=90,save_global=Fa
         return img(plot={'xaxis':None,'yaxis':None,'width':600})
     else:
         return cpd_img  
+
+    
+    
+def coastlines(resolution='110m',lon_360=False):
+    """ A custom method to plot in cylyndrical equi projection, most useful for
+        native projections, geoviews currently supports only Web Mercator in
+        bokeh mode.
+        
+        Other resolutions can be 50m
+        
+        lon_360 flag specifies if longitudes are from -180 to 180 (default) or 0 to 360
+        TODO: if hv.Polygons is used instead of overlay it is way faster but 
+              something is wrong there.
+    """
+    try:
+        import cartopy.io.shapereader as shapereader
+        from cartopy.io.shapereader import natural_earth
+        import shapefile
+        filename = natural_earth(resolution=resolution,category='physical',name='coastline')
+    
+        sf = shapefile.Reader(filename)
+        fields = [x[0] for x in sf.fields][1:]
+        records = sf.records()
+        shps = [s.points for s in sf.shapes()]
+        pls=[]
+        for shp in shps:
+            lons=[lo for lo,_ in shp]
+            lats=[la for _,la in shp]
+            if lon_360:
+                lats_patch1=[lat for lon,lat in zip(lons,lats) if lon<0]
+                lons_patch1=[lon+360.0 for lon in lons if lon<0]
+                if any(lons_patch1):
+                    pls.append(hv.Path((lons_patch1,lats_patch1))(style={'color':'Black'}))    
+                lats_patch2=[lat if lon>=0 else None for lon,lat in zip(lons,lats)]
+                lons_patch2=[lon if lon>=0 else None for lon in lons]
+                if any(lons_patch2):
+                    pls.append(hv.Path((lons_patch2,lats_patch2))(style={'color':'Black'}))
+            else:
+                pls.append(hv.Path((lons,lats))(style={'color':'Black'}))
+        return hv.Overlay(pls)
+    except Exception as err:
+        print('Overlaying Coastlines not available from holoviews because: {0}'.format(err)) 
